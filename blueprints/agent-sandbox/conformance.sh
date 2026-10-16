@@ -36,6 +36,11 @@ INFRA_DIR="$(cd "$SCRIPT_DIR/../../infra/agent-sandbox" && pwd)"
 INFRA_MANIFEST_DIR="$INFRA_DIR/manifests"
 NS="agent-sandboxes"
 SA="sandbox-agent-sa"
+CLAIM="sandbox-agent"
+# Pod name = bound Sandbox's name. With the warm pool (replicas: 1) the
+# claim adopts a pool sandbox named sandbox-agent-pool-xxxxx; on a cold
+# start it is the claim name. Resolved from the claim in
+# resolve_sandbox_pod(); this default only applies until then.
 POD="sandbox-agent"
 CONFIGMAP="sandbox-agent-script"
 CLUSTER_NAME="${CLUSTER_NAME:-agent-sandbox}"
@@ -166,19 +171,37 @@ require_cluster() {
     fi
 }
 
+resolve_sandbox_pod() {
+    # The claim reports the bound Sandbox in .status.sandbox.name; the pod
+    # name equals the sandbox name (v1.0 guarantee). Poll briefly — the
+    # claim binds within a few reconciles.
+    local name="" attempt
+    for attempt in $(seq 1 24); do
+        name=$(kubectl -n "$NS" get sandboxclaim "$CLAIM" \
+            -o jsonpath='{.status.sandbox.name}' 2>/dev/null || echo "")
+        [ -n "$name" ] && break
+        sleep 5
+    done
+    if [ -n "$name" ]; then
+        POD="$name"
+        log "SandboxClaim $CLAIM is bound to Sandbox $POD."
+    else
+        log "SandboxClaim $CLAIM has no bound Sandbox yet; assuming pod name $POD."
+    fi
+}
+
 setup_configmap_with_real_agent() {
-    # sandbox-agent.yaml ships as a SandboxWarmPool (replicas: 0, so
-    # claims cold-start from the template) + SandboxClaim, with a
+    # sandbox-agent.yaml ships as a SandboxWarmPool (replicas: 1, one
+    # pre-warmed sandbox the claim adopts) + SandboxClaim, with a
     # templateRef placeholder and a placeholder ConfigMap. We:
     #   1. Render the manifest with the resolved SandboxTemplate name
     #      and apply it (creates SA + placeholder ConfigMap + Pool + Claim).
     #   2. Overwrite the ConfigMap with the real agent.py contents.
-    #   3. Delete the controller-owned pod so it's recreated and the
-    #      container's startup `cp /config/agent.py /workspace/agent.py`
-    #      picks up the real content.
-    # A cold-started sandbox takes the claim's name, and the pod name
-    # always equals the sandbox name (v1.0 guarantee) — so the static
-    # POD=sandbox-agent reference below remains valid.
+    #   3. Resolve the bound sandbox from the claim and delete its
+    #      controller-owned pod so it's recreated: the container's startup
+    #      `cp /config/agent.py /workspace/agent.py` picks up the real
+    #      content and the IRSA env is injected. The sandbox's PVC
+    #      (/workspace/state) survives the pod recreation.
     RENDERED_SANDBOX_MANIFEST=$(mktemp -t agent-sandbox-claim.XXXXXX.yaml)
     sed -e "s|__SANDBOX_TEMPLATE__|$SANDBOX_TEMPLATE|g" \
         "$BLUEPRINT_MANIFEST_DIR/sandbox-agent.yaml" \
@@ -192,7 +215,9 @@ setup_configmap_with_real_agent() {
         --from-file=agent.py="$AGENT_DIR/agent.py" \
         --dry-run=client -o yaml | kubectl apply -f - >/dev/null
 
-    log "Recreating Sandbox pod so it mounts the real agent.py..."
+    resolve_sandbox_pod
+
+    log "Recreating Sandbox pod $POD so it mounts the real agent.py..."
     kubectl -n "$NS" delete pod "$POD" --ignore-not-found --wait=true >/dev/null 2>&1 || true
 }
 

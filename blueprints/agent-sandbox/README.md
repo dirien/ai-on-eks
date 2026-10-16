@@ -100,12 +100,36 @@ kubectl -n agent-sandboxes create configmap sandbox-agent-script \
     --from-file=agent.py=./agent.py \
     --dry-run=client -o yaml | kubectl apply -f -
 
-# 3. Wait for Ready, then run the agent.
-kubectl -n agent-sandboxes wait --for=condition=Ready pod/sandbox-agent --timeout=120s
-kubectl exec -n agent-sandboxes sandbox-agent -c agent-runtime -- python /workspace/agent.py
+# 3. Resolve the sandbox the claim is bound to. The warm pool (replicas: 1)
+#    hands the claim a pre-warmed sandbox named sandbox-agent-pool-xxxxx;
+#    the pod has the same name.
+SANDBOX=$(kubectl -n agent-sandboxes get sandboxclaim sandbox-agent -o jsonpath='{.status.sandbox.name}')
+
+# 4. The warm pod started before steps 1-2: recreate it so it picks up the
+#    real agent.py and the IRSA env (its /workspace/state PVC is kept).
+kubectl -n agent-sandboxes delete pod "$SANDBOX" --wait=true
+
+# 5. Wait for Ready, then run the agent.
+kubectl -n agent-sandboxes wait --for=condition=Ready "pod/$SANDBOX" --timeout=120s
+kubectl exec -n agent-sandboxes "$SANDBOX" -c agent-runtime -- python /workspace/agent.py
 ```
 
 Expected output is the 5-step sequence with PASS / PASS / PASS / BLOCKED / BLOCKED markers.
+
+### Suspend and resume with persistent state
+
+The agent SandboxTemplates add a `state` volumeClaimTemplate: each sandbox gets its own 1Gi gp3 PVC (`state-<sandbox>`) mounted at `/workspace/state`. Setting `spec.operatingMode: Suspended` on the Sandbox deletes the pod but keeps the Sandbox and its PVC; `Running` brings the pod back with the same volume.
+
+```bash
+kubectl exec -n agent-sandboxes "$SANDBOX" -c agent-runtime -- sh -c 'date > /workspace/state/note'
+kubectl -n agent-sandboxes patch sandbox "$SANDBOX" --type merge -p '{"spec":{"operatingMode":"Suspended"}}'
+kubectl -n agent-sandboxes get pod "$SANDBOX"          # NotFound once suspended
+kubectl -n agent-sandboxes patch sandbox "$SANDBOX" --type merge -p '{"spec":{"operatingMode":"Running"}}'
+kubectl -n agent-sandboxes wait --for=condition=Ready "pod/$SANDBOX" --timeout=180s
+kubectl exec -n agent-sandboxes "$SANDBOX" -c agent-runtime -- cat /workspace/state/note
+```
+
+The EBS volume is zonal, so the resumed pod is scheduled in the volume's AZ. If Karpenter consolidated the empty gVisor node meanwhile (`consolidateAfter: 10m`), resume waits for a new node (60-90s).
 
 ### Automated conformance run
 
@@ -235,8 +259,9 @@ kubectl get applicationnetworkpolicy -n agent-sandboxes sandbox-llm-allowlist
 The container's `cp /config/agent.py /workspace/agent.py` happens once at pod start. If the ConfigMap was updated after the pod was Ready, the workspace has old content. Recreate the pod:
 
 ```bash
-kubectl delete pod sandbox-agent -n agent-sandboxes
-kubectl -n agent-sandboxes wait --for=condition=Ready pod/sandbox-agent --timeout=120s
+SANDBOX=$(kubectl -n agent-sandboxes get sandboxclaim sandbox-agent -o jsonpath='{.status.sandbox.name}')
+kubectl delete pod "$SANDBOX" -n agent-sandboxes
+kubectl -n agent-sandboxes wait --for=condition=Ready "pod/$SANDBOX" --timeout=120s
 ```
 
 This is documented in detail in the parent infra's [Troubleshooting section](../../infra/agent-sandbox/README.md#troubleshooting).
