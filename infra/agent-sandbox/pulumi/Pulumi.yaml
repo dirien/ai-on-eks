@@ -1,0 +1,10 @@
+# Pulumi project template for running the agent-sandbox blueprint with
+# Pulumi HCL (Pulumi executes the Terraform HCL in infra/base/terraform
+# directly, no conversion step).
+#
+# install-pulumi.sh copies this file into terraform/_LOCAL next to the
+# copied base module and blueprint.auto.tfvars; do not run Pulumi from
+# this directory. See ../PULUMI.md.
+name: agent-sandbox-eks
+runtime: hcl
+description: ai-on-eks agent-sandbox blueprint (infra/base/terraform) deployed with Pulumi HCL
