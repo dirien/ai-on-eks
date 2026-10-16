@@ -26,7 +26,7 @@
 #      checked against AWS, not exit codes). Up to MAX_ATTEMPTS.
 #   6. Auxiliary AWS resource sweep — leftover cluster SGs, EBS volumes
 #      tagged for the cluster, placement groups, KMS alias, CloudWatch
-#      log groups.
+#      log groups, Karpenter-created instance profiles.
 #
 # The Pulumi stack itself is kept (empty) so it can be reused; pass
 # REMOVE_STACK=1 to delete it after a successful destroy.
@@ -306,6 +306,35 @@ if [ -n "$LOG_GROUPS" ]; then
     done
 else
     echo "    None found."
+fi
+
+# Karpenter creates one instance profile per EC2NodeClass
+# (<cluster>_<hash>) and deletes it from the EC2NodeClass finalizer.
+# Phases 2-3 stop Karpenter and drop those finalizers, so the profiles
+# outlive the cluster (empty once the node role is destroyed). Not
+# billable, but named after the cluster. Only swept once the cluster is
+# gone, and only profiles Karpenter tagged as owned by this cluster.
+echo "  Karpenter instance profiles (${CLUSTER_NAME}_*, tagged kubernetes.io/cluster/${CLUSTER_NAME}=owned):"
+IP_DELETED=0
+if [ -z "$(cluster_status)" ]; then
+    IP_NAMES=$(aws iam list-instance-profiles \
+        --query "InstanceProfiles[?starts_with(InstanceProfileName, '${CLUSTER_NAME}_')].InstanceProfileName" \
+        --output text 2>/dev/null || echo "")
+    for ip in $IP_NAMES; do
+        owned=$(aws iam list-instance-profile-tags --instance-profile-name "$ip" \
+            --query "Tags[?Key=='kubernetes.io/cluster/${CLUSTER_NAME}'].Value" --output text 2>/dev/null || echo "")
+        [ "$owned" = "owned" ] || continue
+        for role in $(aws iam get-instance-profile --instance-profile-name "$ip" \
+                        --query 'InstanceProfile.Roles[].RoleName' --output text 2>/dev/null || echo ""); do
+            aws iam remove-role-from-instance-profile --instance-profile-name "$ip" --role-name "$role" >/dev/null 2>&1 || true
+        done
+        echo "    Deleting $ip"
+        aws iam delete-instance-profile --instance-profile-name "$ip" >/dev/null 2>&1 || true
+        IP_DELETED=$((IP_DELETED + 1))
+    done
+    [ "$IP_DELETED" -gt 0 ] || echo "    None found."
+else
+    echo "    Skipped: EKS cluster $CLUSTER_NAME still exists."
 fi
 
 echo ""

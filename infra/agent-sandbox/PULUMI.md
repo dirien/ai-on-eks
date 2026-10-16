@@ -102,7 +102,9 @@ writes its own temporary kubeconfig and leaves your current context alone.
    the EKS cluster gone, and is the stack empty?
 6. Sweeps leftovers: cluster security groups in a remaining VPC (then destroys again),
    `available` EBS volumes tagged `kubernetes.io/cluster/<name>=owned`, placement groups,
-   the `alias/eks/<name>` KMS alias, and `/aws/eks/<name>` log groups.
+   the `alias/eks/<name>` KMS alias, `/aws/eks/<name>` log groups, and the instance
+   profiles Karpenter created per EC2NodeClass (`<name>_<hash>`, tagged
+   `kubernetes.io/cluster/<name>=owned`; step 3 drops the finalizer that would delete them).
 
 The stack itself is kept, empty, so it can be reused.
 
