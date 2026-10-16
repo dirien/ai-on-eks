@@ -33,6 +33,13 @@ resource "helm_release" "karpenter_crd" {
   wait             = true
   take_ownership   = true
 
+  # Authenticated pulls (avoids anonymous rate limits and stale local
+  # public.ecr.aws credentials). Replaces the helm provider `registries`
+  # attribute, which Pulumi HCL cannot parse (see main.tf and
+  # https://github.com/pulumi/pulumi-hcl/issues/687).
+  repository_username = data.aws_ecrpublic_authorization_token.token.user_name
+  repository_password = data.aws_ecrpublic_authorization_token.token.password
+
   depends_on = [module.karpenter]
 }
 
@@ -46,6 +53,10 @@ resource "helm_release" "karpenter" {
   version          = var.karpenter_version
   wait             = true
   skip_crds        = true
+
+  # See karpenter_crd above.
+  repository_username = data.aws_ecrpublic_authorization_token.token.user_name
+  repository_password = data.aws_ecrpublic_authorization_token.token.password
 
   values = [
     <<-EOT

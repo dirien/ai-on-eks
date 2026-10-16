@@ -2,42 +2,68 @@ provider "aws" {
   region = local.region
 }
 
+# Cluster credentials for the in-cluster providers come from an exec
+# credential plugin (`aws eks get-token`) instead of a token attribute.
+#
+# Why exec and not an ephemeral/data `aws_eks_cluster_auth` token:
+#   - Pulumi HCL does not support `ephemeral` blocks yet
+#     (https://github.com/pulumi/pulumi-hcl/issues/169).
+#   - A `data "aws_eks_cluster_auth"` token is only valid for ~15 minutes.
+#     A first apply that creates the cluster and then installs Karpenter,
+#     ArgoCD and the addons can outlive it (401 Unauthorized), and Pulumi
+#     stores provider inputs in state, so a later `pulumi destroy` would
+#     re-use the expired token.
+#   - exec mints a fresh token on demand, works the same in Terraform and
+#     Pulumi HCL, and needs only the AWS CLI v2 on PATH (already a
+#     prerequisite of every blueprint).
 provider "kubernetes" {
   host                   = module.eks.cluster_endpoint
   cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
-  token                  = ephemeral.aws_eks_cluster_auth.this.token
+
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "aws"
+    args        = ["eks", "get-token", "--cluster-name", module.eks.cluster_name, "--region", local.region, "--output", "json"]
+  }
 }
 
 provider "helm" {
   kubernetes = {
     host                   = module.eks.cluster_endpoint
     cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
-    token                  = ephemeral.aws_eks_cluster_auth.this.token
+
+    exec = {
+      api_version = "client.authentication.k8s.io/v1beta1"
+      command     = "aws"
+      args        = ["eks", "get-token", "--cluster-name", module.eks.cluster_name, "--region", local.region, "--output", "json"]
+    }
   }
 
-  registries = [
-    {
-      url      = "oci://public.ecr.aws"
-      username = ephemeral.aws_ecrpublic_authorization_token.token.user_name
-      password = ephemeral.aws_ecrpublic_authorization_token.token.password
-    }
-  ]
+  # No provider-level `registries`: the list-nested attribute form
+  # (`registries = [{ ... }]`) is rejected by Pulumi HCL
+  # (https://github.com/pulumi/pulumi-hcl/issues/687), and the block
+  # form it accepts is rejected by Terraform/OpenTofu. The only OCI charts pulled
+  # from public.ecr.aws are the two Karpenter releases (karpenter.tf), which
+  # now pass repository_username/repository_password themselves.
 }
 
 provider "kubectl" {
   apply_retry_count      = 30
   host                   = module.eks.cluster_endpoint
   cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
-  token                  = ephemeral.aws_eks_cluster_auth.this.token
   load_config_file       = false
   lazy_load              = true
+
+  exec {
+    api_version = "client.authentication.k8s.io/v1beta1"
+    command     = "aws"
+    args        = ["eks", "get-token", "--cluster-name", module.eks.cluster_name, "--region", local.region, "--output", "json"]
+  }
 }
 
-ephemeral "aws_eks_cluster_auth" "this" {
-  name = module.eks.cluster_name
-}
-
-ephemeral "aws_ecrpublic_authorization_token" "token" {
+# ECR Public auth tokens are only issued in us-east-1. A data source rather
+# than an ephemeral resource so Pulumi HCL can evaluate it (pulumi-hcl#169).
+data "aws_ecrpublic_authorization_token" "token" {
   region = "us-east-1"
 }
 

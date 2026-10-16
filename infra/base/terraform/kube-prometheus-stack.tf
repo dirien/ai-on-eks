@@ -24,7 +24,10 @@ resource "kubernetes_namespace_v1" "kube_prometheus_stack_namespace" {
 # Grafana Admin Password
 #---------------------------------------------------------------
 resource "random_password" "grafana" {
-  count   = var.enable_kube_prometheus_stack && var.grafana_admin_password == "" ? 1 : 0
+  # nonsensitive(): only the emptiness check is used for count, never the value.
+  # Terraform accepts a sensitive count; Pulumi HCL does not yet
+  # (https://github.com/pulumi/pulumi-hcl/issues/686).
+  count   = var.enable_kube_prometheus_stack && nonsensitive(var.grafana_admin_password == "") ? 1 : 0
   length  = 16
   special = true
 }

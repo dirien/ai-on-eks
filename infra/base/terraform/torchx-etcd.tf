@@ -14,7 +14,9 @@ data "kubectl_file_documents" "torchx_etcd_yaml" {
 }
 
 resource "kubectl_manifest" "torchx_etcd" {
-  for_each   = var.enable_torchx_etcd ? data.kubectl_file_documents.torchx_etcd_yaml.manifests : {}
-  yaml_body  = each.value
-  depends_on = [module.eks.eks_cluster_id]
+  for_each  = var.enable_torchx_etcd ? data.kubectl_file_documents.torchx_etcd_yaml.manifests : {}
+  yaml_body = each.value
+  # module.eks has no eks_cluster_id output (EKS module v21); see eks.tf and
+  # https://github.com/pulumi/pulumi-hcl/issues/685
+  depends_on = [module.eks]
 }
