@@ -55,14 +55,26 @@ spec:
     # Install gVisor runsc binary + containerd shim from the official
     # Google release channel. Using `release/latest/` alias keeps
     # this blueprint self-updating. Production deployments should
-    # pin to a specific release tag and bump via CI.
+    # pin to a specific release (e.g. release/20261005/) and bump via CI.
+    #
+    # gVisor releases now ship as a single tarball: runsc,
+    # containerd-shim-runsc-v1 and a gvisor-bin/ directory of sidecar
+    # binaries (gvisor_sentry, ...) that runsc requires next to itself
+    # (/usr/local/bin/gvisor-bin/gvisor_sentry; --sidecar-usage-policy
+    # defaults to STRICT). The per-binary URLs
+    # (release/latest/<arch>/runsc) return 404. Extract the whole
+    # tarball into /usr/local/bin. The zstd tarball is the smaller one;
+    # AL2023 ships zstd + GNU tar.
     ARCH=$(uname -m)
+    URL="https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}"
     mkdir -p /tmp/gvisor && cd /tmp/gvisor
 
-    curl -fsSL -o runsc "https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}/runsc"
-    curl -fsSL -o containerd-shim-runsc-v1 "https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}/containerd-shim-runsc-v1"
-    chmod +x runsc containerd-shim-runsc-v1
-    mv runsc containerd-shim-runsc-v1 /usr/local/bin/
+    curl -fsSL -o gvisor.tar.zstd "${URL}/gvisor.tar.zstd"
+    curl -fsSL -o gvisor.tar.zstd.sha512 "${URL}/gvisor.tar.zstd.sha512"
+    sha512sum -c gvisor.tar.zstd.sha512
+    tar --zstd -xf gvisor.tar.zstd -C /usr/local/bin
+    chmod +x /usr/local/bin/runsc /usr/local/bin/containerd-shim-runsc-v1
+    rm -f gvisor.tar.zstd gvisor.tar.zstd.sha512
 
     # Register runsc with containerd. AL2023 / EKS 1.34 ships with
     # containerd v2 which uses the `io.containerd.cri.v1.runtime.*`
