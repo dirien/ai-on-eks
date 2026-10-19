@@ -78,7 +78,7 @@ Both paths produce equivalent running pods. Each tier (`runc`, `gvisor`) is a Sa
 
 | Component | Version | Purpose |
 |-----------|---------|---------|
-| [kubernetes-sigs/agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) | v1.0.1 | Sandbox / SandboxTemplate / SandboxWarmPool / SandboxClaim controller, `v1beta1` API (base infra ArgoCD addon, `enable_agent_sandbox`) |
+| [kubernetes-sigs/agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) | v1.0.7 (set in `blueprint.tfvars`; base default v1.0.1) | Sandbox / SandboxTemplate / SandboxWarmPool / SandboxClaim controller, `v1beta1` API (base infra ArgoCD addon, `enable_agent_sandbox`) |
 | [kro](https://kro.run/) | 0.9.1 | ResourceGraphDefinition-based composition (base infra ArgoCD addon, `enable_kro`; optional) |
 | [gVisor](https://gvisor.dev/) | runsc (AL2023) | Userspace syscall interception for gvisor tier (installed via Karpenter NodePool user-data) |
 | [Karpenter](https://karpenter.sh/) | Bundled with base module | Node autoscaling with a dedicated gVisor NodePool (Standard EKS) |
@@ -174,6 +174,8 @@ cd ai-on-eks/infra/agent-sandbox
 # (Optional) Edit terraform/blueprint.tfvars to change region or toggle Auto Mode
 ./install.sh                                             # 20-30 min
 ```
+
+To deploy the same Terraform with Pulumi HCL (Pulumi state, optional ESC credentials) instead, use `./install-pulumi.sh` / `./cleanup-pulumi.sh`; see [PULUMI.md](PULUMI.md).
 
 The solution's `blueprint.tfvars` enables the `agent-sandbox` controller and `kro` as ArgoCD-managed addons via the base module. After `install.sh` completes, the cluster is up with:
 
@@ -271,10 +273,10 @@ See the [basic blueprint README](../../blueprints/agent-sandbox/basic/README.md)
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `name` | Cluster naming prefix | `agent-sandbox` |
-| `region` | AWS region | Base module default (`us-west-2`); uncomment to override |
+| `region` | AWS region | `us-east-1` in this blueprint (base module default `us-west-2`) |
 | `eks_cluster_version` | EKS version | `1.34` |
 | `enable_agent_sandbox` | Deploy the SIG-Apps agent-sandbox controller via ArgoCD | `true` |
-| `agent_sandbox_version` | kubernetes-sigs/agent-sandbox ref | `v1.0.1` |
+| `agent_sandbox_version` | kubernetes-sigs/agent-sandbox ref | `v1.0.7` (base default `v1.0.1`) |
 | `enable_kro` | Deploy kro via ArgoCD | `true` |
 | `kro_version` | kro Helm chart version | `0.9.1` |
 | `enable_cilium` | Deploy Cilium in aws-cni chaining mode (Standard EKS only — leave `false` for Auto Mode) | `true` |

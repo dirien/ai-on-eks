@@ -7,6 +7,16 @@
 #   - agent-script ConfigMap mount (sandbox-agent-script, populated by
 #     conformance.sh / install.sh)
 #   - Bedrock + HOME env vars
+#   - `state` volumeClaimTemplate: a 1Gi gp3 PVC (gp3 is the default
+#     StorageClass created by the base module) mounted at
+#     /workspace/state. Unlike the emptyDir /workspace it survives the
+#     pod being deleted, so it demonstrates suspend/resume:
+#       kubectl exec <sandbox> -- sh -c 'date > /workspace/state/note'
+#       kubectl patch sandbox <sandbox> --type merge -p '{"spec":{"operatingMode":"Suspended"}}'
+#       kubectl patch sandbox <sandbox> --type merge -p '{"spec":{"operatingMode":"Running"}}'
+#       kubectl exec <sandbox> -- cat /workspace/state/note
+#     The controller names the PVC state-<sandbox-name> and adds the
+#     matching pod volume `state`; the container only declares the mount.
 #
 # Conformance claims this template on Auto Mode (gVisor unavailable)
 # and sandbox-agent-gvisor on Standard EKS.
@@ -38,6 +48,11 @@ spec:
       # IRSA-bound ServiceAccount provisioned alongside the SandboxClaim.
       # See sandbox-agent.yaml for the SA + ConfigMap that pair with this template.
       serviceAccountName: sandbox-agent-sa
+      # fsGroup makes the kubelet chown the PVC to gid 1000 so the
+      # non-root agent (runAsUser 1000) can write /workspace/state.
+      securityContext:
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
       # No runtimeClassName → runc (cluster default).
       containers:
         - name: agent-runtime
@@ -87,6 +102,10 @@ spec:
             - name: agent-script
               mountPath: /config
               readOnly: true
+            # PVC from spec.volumeClaimTemplates below (persists across
+            # Suspended/Running).
+            - name: state
+              mountPath: /workspace/state
       volumes:
         - name: workspace
           emptyDir: {}
@@ -98,3 +117,15 @@ spec:
             items:
               - key: agent.py
                 path: agent.py
+  # Per-sandbox persistent volume. The controller creates PVC
+  # state-<sandbox-name> (owned by the Sandbox, so it is deleted with it)
+  # and injects pod volume `state`, mounted above at /workspace/state.
+  volumeClaimTemplates:
+    - metadata:
+        name: state
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: gp3
+        resources:
+          requests:
+            storage: 1Gi

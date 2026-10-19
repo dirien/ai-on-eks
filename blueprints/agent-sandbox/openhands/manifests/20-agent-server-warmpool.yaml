@@ -1,0 +1,14 @@
+# Two agent-server pods sit Ready on the gVisor node. A claim binds one of
+# them (a bind, not a boot); the pool then starts a replacement in the
+# background. Two, not one, so a retake never waits for the refill.
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxWarmPool
+metadata:
+  name: openhands-pool
+  namespace: agent-sandboxes
+  labels:
+    app.kubernetes.io/part-of: openhands-demo
+spec:
+  replicas: 2
+  sandboxTemplateRef:
+    name: openhands-agent-server

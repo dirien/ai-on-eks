@@ -1,0 +1,8 @@
+# Client side of the demo (the oh-client pod installs these at start-up).
+# SDK and agent-server image are released together: keep 1.44.1 in sync with
+# manifests/10-agent-server-template.yaml.
+openhands-sdk[boto3]==1.44.1
+openhands-tools==1.44.1
+k8s-agent-sandbox==1.0.7
+# The adapter is not on PyPI; pinned to the commit this demo was built on.
+openhands-k8s-agent-sandbox @ git+https://github.com/kubernetes-sigs/agent-sandbox.git@e0b002e221a7e8d5534f686fe1d3ef4fdfd6d6bb#subdirectory=clients/integrations/openhands

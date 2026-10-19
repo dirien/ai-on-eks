@@ -1,0 +1,11 @@
+# Claimed on screen in the recording, to look inside a sandbox from the same
+# warm pool the agent uses (same SandboxTemplate: gVisor, egress allowlist,
+# IRSA, no Kubernetes token). record.sh deletes it after the take.
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxClaim
+metadata:
+  name: guardrails
+  namespace: agent-sandboxes
+spec:
+  warmPoolRef:
+    name: openhands-pool

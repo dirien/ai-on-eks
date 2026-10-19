@@ -1,0 +1,111 @@
+# The OpenHands client (run.py + AgentSandboxWorkspace) runs in the cluster.
+# The adapter's default endpoint is http://<pod-ip>:8000, and EKS pod IPs are
+# VPC addresses, so the client has to sit in the VPC. (The SDK's event
+# websocket carries no custom headers, so the sandbox-router path would lose
+# its X-Sandbox-* routing headers on it; gVisor pods also refuse
+# `kubectl port-forward`. See the adapter README, Troubleshooting.)
+#
+# Its own namespace on purpose: every pod in agent-sandboxes is in Cilium
+# default-deny egress (admin-allow-cluster-dns selects the whole namespace).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: openhands-client
+  labels:
+    app.kubernetes.io/part-of: openhands-demo
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: oh-client
+  namespace: openhands-client
+---
+# Just enough to claim from the warm pool and read the bound sandbox.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: openhands-claimer
+  namespace: agent-sandboxes
+rules:
+  - apiGroups: ["extensions.agents.x-k8s.io"]
+    resources: ["sandboxclaims"]
+    verbs: ["get", "list", "watch", "create", "delete", "patch"]
+  - apiGroups: ["agents.x-k8s.io"]
+    resources: ["sandboxes"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: openhands-claimer
+  namespace: agent-sandboxes
+subjects:
+  - kind: ServiceAccount
+    name: oh-client
+    namespace: openhands-client
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: openhands-claimer
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oh-client
+  namespace: openhands-client
+  labels:
+    app.kubernetes.io/name: oh-client
+    app.kubernetes.io/part-of: openhands-demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: oh-client
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: oh-client
+    spec:
+      serviceAccountName: oh-client
+      containers:
+        - name: client
+          # bookworm (not slim): pip needs git for the adapter's git URL.
+          image: python:3.12-bookworm
+          workingDir: /app
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              pip install --no-cache-dir --root-user-action=ignore -q -r /config/requirements.txt \
+                && touch /tmp/ready && echo "client ready" && exec sleep infinity
+          # Only the pool session key. Nothing that changes what the SDK prints
+          # (no LOG_LEVEL, no OPENHANDS_SUPPRESS_BANNER): the recording shows its
+          # default output.
+          env:
+            - name: SANDBOX_SESSION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: openhands-session-key
+                  key: key
+          readinessProbe:
+            exec:
+              command: ["test", "-f", "/tmp/ready"]
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+          volumeMounts:
+            - name: app
+              mountPath: /app
+            - name: config
+              mountPath: /config
+      volumes:
+        - name: app
+          configMap:
+            name: oh-client-app
+        - name: config
+          configMap:
+            name: oh-client-requirements

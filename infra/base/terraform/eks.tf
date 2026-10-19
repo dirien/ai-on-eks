@@ -416,7 +416,10 @@ resource "kubernetes_annotations" "disable_gp2" {
   }
   force = true
 
-  depends_on = [module.eks.eks_cluster_id]
+  # module.eks has no eks_cluster_id output (EKS module v21). Terraform ignores
+  # the dangling reference, Pulumi HCL rejects it
+  # (https://github.com/pulumi/pulumi-hcl/issues/685); depend on the module.
+  depends_on = [module.eks]
 }
 
 resource "kubernetes_storage_class_v1" "default_gp3" {

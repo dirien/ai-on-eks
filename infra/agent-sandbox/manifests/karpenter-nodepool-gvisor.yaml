@@ -13,6 +13,17 @@
 #
 # Node label `agent-sandbox/runtime=gvisor` is referenced by the
 # RuntimeClass scheduling block in runtimeclass-gvisor.yaml.
+#
+# gVisor version: pinned by GVISOR_RELEASE at the top of the user-data
+# script below (a dated directory under
+# https://storage.googleapis.com/gvisor/releases/release/). To bump it,
+# pick a newer dated release that has gvisor.tar.zstd and
+# gvisor.tar.zstd.sha512 for both x86_64 and aarch64.
+#
+# Requires Cilium (enable_cilium = true, this blueprint's Standard EKS
+# default): the NodePool declares Cilium's agent-not-ready startup taint.
+# Remove the startupTaints block if Cilium is not installed, or gVisor
+# nodes never become schedulable.
 ---
 apiVersion: karpenter.k8s.aws/v1
 kind: EC2NodeClass
@@ -52,17 +63,34 @@ spec:
     #!/bin/bash
     set -euxo pipefail
 
+    # gVisor release to install: a dated directory under
+    # https://storage.googleapis.com/gvisor/releases/release/ (gVisor tag
+    # release-<GVISOR_RELEASE>). Bump here; the new release must have
+    # gvisor.tar.zstd + gvisor.tar.zstd.sha512 for x86_64 and aarch64.
+    GVISOR_RELEASE="20261005.0"
+
     # Install gVisor runsc binary + containerd shim from the official
-    # Google release channel. Using `release/latest/` alias keeps
-    # this blueprint self-updating. Production deployments should
-    # pin to a specific release tag and bump via CI.
+    # Google release bucket, pinned to GVISOR_RELEASE (not the
+    # `release/latest/` alias, which changes under you).
+    #
+    # gVisor releases now ship as a single tarball: runsc,
+    # containerd-shim-runsc-v1 and a gvisor-bin/ directory of sidecar
+    # binaries (gvisor_sentry, ...) that runsc requires next to itself
+    # (/usr/local/bin/gvisor-bin/gvisor_sentry; --sidecar-usage-policy
+    # defaults to STRICT). The per-binary URLs
+    # (release/<version>/<arch>/runsc) return 404. Extract the whole
+    # tarball into /usr/local/bin. The zstd tarball is the smaller one;
+    # AL2023 ships zstd + GNU tar.
     ARCH=$(uname -m)
+    URL="https://storage.googleapis.com/gvisor/releases/release/${GVISOR_RELEASE}/${ARCH}"
     mkdir -p /tmp/gvisor && cd /tmp/gvisor
 
-    curl -fsSL -o runsc "https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}/runsc"
-    curl -fsSL -o containerd-shim-runsc-v1 "https://storage.googleapis.com/gvisor/releases/release/latest/${ARCH}/containerd-shim-runsc-v1"
-    chmod +x runsc containerd-shim-runsc-v1
-    mv runsc containerd-shim-runsc-v1 /usr/local/bin/
+    curl -fsSL -o gvisor.tar.zstd "${URL}/gvisor.tar.zstd"
+    curl -fsSL -o gvisor.tar.zstd.sha512 "${URL}/gvisor.tar.zstd.sha512"
+    sha512sum -c gvisor.tar.zstd.sha512
+    tar --zstd -xf gvisor.tar.zstd -C /usr/local/bin
+    chmod +x /usr/local/bin/runsc /usr/local/bin/containerd-shim-runsc-v1
+    rm -f gvisor.tar.zstd gvisor.tar.zstd.sha512
 
     # Register runsc with containerd. AL2023 / EKS 1.34 ships with
     # containerd v2 which uses the `io.containerd.cri.v1.runtime.*`
@@ -120,6 +148,19 @@ spec:
         - key: agent-sandbox/runtime
           value: gvisor
           effect: NoSchedule
+      # Cilium's operator taints every new node with
+      # node.cilium.io/agent-not-ready until the Cilium agent runs there.
+      # Declared as a startup taint (Cilium's Karpenter guidance), so
+      # Karpenter counts a registering node as capacity for the pending
+      # pod. Without it Karpenter launched a new gVisor node every ~25s
+      # until the first one initialized (3 nodes for 1 pod in testing).
+      # REQUIRES Cilium (enable_cilium = true, the Standard EKS default of
+      # this blueprint). Remove this block when Cilium is not installed:
+      # nothing would clear the taint and pods would never schedule.
+      startupTaints:
+        - key: node.cilium.io/agent-not-ready
+          value: "true"
+          effect: NoExecute
       nodeClassRef:
         group: karpenter.k8s.aws
         kind: EC2NodeClass
