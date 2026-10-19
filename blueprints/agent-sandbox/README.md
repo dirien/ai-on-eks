@@ -41,6 +41,7 @@ This blueprint exists for two reasons:
 | `egress/` | Egress enforcement example — auto-detects compute mode and applies Cilium CNPs (Standard EKS) or native ANPs (Auto Mode), plus IRSA bootstrap for Bedrock access. See [`egress/README.md`](egress/README.md). |
 | `basic/` | Smallest viable Sandbox deployment — a SandboxClaim against the platform's basic templates (nginx:alpine workload, no IRSA, no agent script). Use as the first tier of testing or as a starting point for non-agent workloads. See [`basic/README.md`](basic/README.md). |
 | `conformance.sh` | End-to-end test runner: claims the right agent template, applies the agent script, executes the agent, asserts PASS/BLOCKED markers. |
+| `openhands/` | Demo: an OpenHands coding agent in a sandbox claimed from a gVisor warm pool, with a raw VHS recording (Pulumi HCL deployment). See [`openhands/README.md`](openhands/README.md). |
 
 ## What the agent does
 

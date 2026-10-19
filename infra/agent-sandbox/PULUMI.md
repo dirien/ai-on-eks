@@ -29,6 +29,8 @@ pulumi env run ediri/pulumi-idp/auth -- kubectl get pods -n agent-sandbox-system
 ./cleanup-pulumi.sh
 ```
 
+Demo on top of this deployment: [`blueprints/agent-sandbox/openhands/`](../../blueprints/agent-sandbox/openhands/), an OpenHands coding agent in a sandbox claimed from a gVisor warm pool, with a raw VHS recording.
+
 | Variable | Default | Used by |
 |---|---|---|
 | `PULUMI_STACK` | `ediri/agent-sandbox-eks/dev` | both scripts |

@@ -1,0 +1,88 @@
+# SandboxTemplate for pre-warmed OpenHands agent-server pods, adapted from
+# kubernetes-sigs/agent-sandbox clients/integrations/openhands/configs/
+# agent-server-template.yaml (main @ e0b002e) for the ai-on-eks blueprint:
+#
+#   - namespace agent-sandboxes, so the blueprint's Cilium policies apply
+#     (admin-block-imds, admin-allow-cluster-dns, sandbox-llm-allowlist)
+#   - label egress-tier: sandbox -> FQDN allowlist: PyPI, Bedrock, STS only
+#   - runtimeClassName: gvisor + the gVisor NodePool toleration
+#   - networkPolicyManagement: Unmanaged (Cilium owns the policy, like the
+#     blueprint's own templates)
+#   - serviceAccountName: sandbox-agent-sa, the blueprint's IRSA-annotated
+#     SA (role agent-sandbox-bedrock-irsa, bedrock:InvokeModel* on Claude
+#     Sonnet 4.x only). The agent-server calls Bedrock with it; no API key.
+#   - automountServiceAccountToken: false: the agent gets no Kubernetes token
+#     (the IRSA web-identity token is a separate projected volume)
+#   - LITELLM_LOCAL_MODEL_COST_MAP: LiteLLM otherwise fetches its price list
+#     from raw.githubusercontent.com at start-up, which is off the allowlist
+#
+# The readinessProbe on /health:8000 is load-bearing (see the adapter README):
+# Ready must mean "agent-server is serving".
+apiVersion: extensions.agents.x-k8s.io/v1beta1
+kind: SandboxTemplate
+metadata:
+  name: openhands-agent-server
+  namespace: agent-sandboxes
+  labels:
+    agent-sandbox/tier: gvisor
+    app.kubernetes.io/part-of: openhands-demo
+spec:
+  networkPolicyManagement: Unmanaged
+  podTemplate:
+    metadata:
+      labels:
+        egress-tier: sandbox
+        agent-sandbox/tier: gvisor
+        app.kubernetes.io/name: openhands-agent-server
+        app.kubernetes.io/part-of: openhands-demo
+    spec:
+      serviceAccountName: sandbox-agent-sa
+      automountServiceAccountToken: false
+      runtimeClassName: gvisor
+      tolerations:
+        - key: agent-sandbox/runtime
+          operator: Equal
+          value: gvisor
+          effect: NoSchedule
+      containers:
+        - name: agent-server
+          # Same release as the client's openhands-sdk (1.44.1, the version
+          # the adapter's example template pins).
+          image: ghcr.io/openhands/agent-server:1.44.1-python
+          args: ["--host", "0.0.0.0", "--port", "8000"]
+          ports:
+            - containerPort: 8000
+          env:
+            - name: OH_SESSION_API_KEYS_0
+              valueFrom:
+                secretKeyRef:
+                  name: openhands-session-key
+                  key: key
+            - name: AWS_REGION
+              value: us-east-1
+            - name: AWS_DEFAULT_REGION
+              value: us-east-1
+            - name: LITELLM_LOCAL_MODEL_COST_MAP
+              value: "True"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 0
+            periodSeconds: 1
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+              ephemeral-storage: "2Gi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+              ephemeral-storage: "4Gi"
+      restartPolicy: OnFailure
