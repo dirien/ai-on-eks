@@ -108,23 +108,23 @@ requires `LLM_API_KEY`, runs workspace operations before the agent), so
 - `pulumi` (v3.268+, logged in to Pulumi Cloud), AWS CLI v2, `kubectl`,
   `openssl`.
 
-**AWS credentials.** The scripts in this folder use your ambient AWS
-credentials (`AWS_PROFILE`, environment, SSO). To take them from a Pulumi ESC
-environment instead, set `ESC_ENV=<org>/<project>/<env>`: each script then
-re-runs itself under `pulumi env run "$ESC_ENV"`.
+**AWS credentials.** All scripts, here and in `infra/agent-sandbox`, use
+your ambient AWS credentials (`AWS_PROFILE`, environment, SSO). To take them
+from a Pulumi ESC environment instead, set `ESC_ENV=<org>/<project>/<env>`:
+each script then runs its AWS calls under `pulumi env run "$ESC_ENV"`.
 
 1. **Cluster.** Deploy the agent-sandbox blueprint with Pulumi HCL, as
    described in [`infra/agent-sandbox/PULUMI.md`](../../../infra/agent-sandbox/PULUMI.md).
-   `install-pulumi.sh` always takes AWS credentials from an ESC environment,
-   so set `PULUMI_STACK` and `ESC_ENV` to your own (see the variables table
-   in PULUMI.md). From the repo root:
+   From the repo root:
 
    ```bash
    cd infra/agent-sandbox
-   PULUMI_STACK=<org>/agent-sandbox-eks/dev ESC_ENV=<org>/<project>/<env> ./install-pulumi.sh
+   ./install-pulumi.sh
    ```
 
-   On 18 October: 21m44s, `+ 180 created`.
+   On a first run it creates and selects the stack `dev` in your default
+   Pulumi organization (set `PULUMI_STACK=<org>/agent-sandbox-eks/<stack>`
+   to pick another). On 18 October: 21m44s, `+ 180 created`.
 
 2. **Platform.** From the repo root:
 
@@ -273,7 +273,7 @@ From this folder:
 ```bash
 ./setup-openhands.sh delete   # optional: only this demo's objects
 cd ../../../infra/agent-sandbox
-PULUMI_STACK=<org>/agent-sandbox-eks/dev ESC_ENV=<org>/<project>/<env> ./cleanup-pulumi.sh
+./cleanup-pulumi.sh
 ```
 
 `cleanup-pulumi.sh` (see [PULUMI.md](../../../infra/agent-sandbox/PULUMI.md#what-cleanup-pulumish-does))

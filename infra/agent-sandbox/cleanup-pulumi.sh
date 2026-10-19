@@ -3,10 +3,11 @@
 # deployment (install-pulumi.sh). Port of cleanup.sh with the
 # `terraform destroy` phase replaced by `pulumi destroy`.
 #
-# The whole script runs inside `pulumi env run <ESC env>` (it re-execs
-# itself) so aws, kubectl and pulumi all get AWS credentials from
-# Pulumi ESC. Phases run in order; each is idempotent and tolerates
-# being skipped if its prerequisites are missing.
+# AWS credentials: the ambient ones (AWS_PROFILE, env, SSO, ...), or,
+# with ESC_ENV set, the whole script runs inside `pulumi env run
+# <ESC env>` (it re-execs itself) so aws, kubectl and pulumi all get AWS
+# credentials from Pulumi ESC. Phases run in order; each is idempotent
+# and tolerates being skipped if its prerequisites are missing.
 #
 #   0. Egress example uninstall — removes CNPs/ANPs + the Bedrock IRSA
 #      role provisioned by blueprints/agent-sandbox/egress.
@@ -32,8 +33,11 @@
 # REMOVE_STACK=1 to delete it after a successful destroy.
 #
 # Environment:
-#   PULUMI_STACK   (default ediri/agent-sandbox-eks/dev)
-#   ESC_ENV        (default ediri/pulumi-idp/auth)
+#   PULUMI_STACK   stack to destroy, e.g. <org>/agent-sandbox-eks/dev
+#                  (default: the stack selected in terraform/_LOCAL, the
+#                  one install-pulumi.sh used; exits if none is selected)
+#   ESC_ENV        Pulumi ESC environment that exports AWS credentials
+#                  (default: unset, use the ambient AWS credentials)
 #   MAX_ATTEMPTS   pulumi destroy attempts (default 3)
 #   KEEP_IN_CLUSTER_STATE=1  skip the state removal in phase 5 and let
 #                  pulumi destroy delete in-cluster resources via the API
@@ -47,13 +51,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOCAL_DIR="$SCRIPT_DIR/terraform/_LOCAL"
-PULUMI_STACK="${PULUMI_STACK:-ediri/agent-sandbox-eks/dev}"
-ESC_ENV="${ESC_ENV:-ediri/pulumi-idp/auth}"
+PULUMI_STACK="${PULUMI_STACK:-}"
+ESC_ENV="${ESC_ENV:-}"
 MAX_ATTEMPTS="${MAX_ATTEMPTS:-3}"
 
-# Re-exec under Pulumi ESC so every aws/kubectl/pulumi call below has
-# AWS credentials.
-if [ -z "${AGENT_SANDBOX_CLEANUP_IN_ESC:-}" ]; then
+# With ESC_ENV set, re-exec under Pulumi ESC so every aws/kubectl/pulumi
+# call below has AWS credentials; otherwise use the ambient ones.
+if [ -n "$ESC_ENV" ] && [ -z "${AGENT_SANDBOX_CLEANUP_IN_ESC:-}" ]; then
     export AGENT_SANDBOX_CLEANUP_IN_ESC=1
     exec pulumi env run "$ESC_ENV" -- bash "$SCRIPT_DIR/$(basename "$0")" "$@"
 fi
@@ -62,15 +66,29 @@ for bin in pulumi aws kubectl python3; do
     command -v "$bin" >/dev/null 2>&1 || { echo "ERROR: '$bin' not found on PATH." >&2; exit 1; }
 done
 
+# Stack: PULUMI_STACK, else the stack selected in _LOCAL (install-pulumi.sh
+# selects the one it deploys there). Resolved before any phase runs, so a
+# missing stack stops the script before it deletes anything.
+if [ -z "$PULUMI_STACK" ] && [ -f "$LOCAL_DIR/Pulumi.yaml" ]; then
+    PULUMI_STACK="$(pulumi -C "$LOCAL_DIR" stack --show-name -Q 2>/dev/null || true)"
+fi
+if [ -z "$PULUMI_STACK" ]; then
+    echo "ERROR: no Pulumi stack selected in $LOCAL_DIR." >&2
+    echo "       Set PULUMI_STACK=<org>/agent-sandbox-eks/<stack> (list them with 'pulumi stack ls --all')." >&2
+    exit 1
+fi
+RUN_PREFIX="${ESC_ENV:+pulumi env run $ESC_ENV -- }"
+
 TFVARS="$SCRIPT_DIR/terraform/blueprint.tfvars"
 if [ -f "$TFVARS" ]; then
     CLUSTER_NAME=$(grep -E '^name\s*=' "$TFVARS" | head -1 | awk -F'"' '{print $2}')
     TFVARS_REGION=$(grep -E '^region\s*=' "$TFVARS" | head -1 | awk -F'"' '{print $2}' || echo "")
 fi
 CLUSTER_NAME="${CLUSTER_NAME:-agent-sandbox}"
-# Region precedence: tfvars > base module default (us-west-2). The ESC
-# environment exports AWS_REGION for its own default region, which is
-# not necessarily the deployment region, so it is deliberately ignored.
+# Region precedence: tfvars > base module default (us-west-2). An ESC
+# environment or the shell may export AWS_REGION for its own default
+# region, which is not necessarily the deployment region, so it is
+# deliberately ignored.
 REGION="${TFVARS_REGION:-us-west-2}"
 export AWS_REGION="$REGION" AWS_DEFAULT_REGION="$REGION"
 echo "Resolved cluster=$CLUSTER_NAME region=$REGION stack=$PULUMI_STACK"
@@ -353,6 +371,6 @@ else
     echo "  - Orphaned ENIs / EC2 instances tagged with the cluster name"
     echo "To retry the destroy manually:"
     echo "  cd $LOCAL_DIR"
-    echo "  pulumi env run $ESC_ENV -- pulumi destroy --stack $PULUMI_STACK --yes"
+    echo "  ${RUN_PREFIX}pulumi destroy --stack $PULUMI_STACK --yes"
     exit 1
 fi

@@ -175,7 +175,7 @@ cd ai-on-eks/infra/agent-sandbox
 ./install.sh                                             # 20-30 min
 ```
 
-To deploy the same Terraform with Pulumi HCL (Pulumi state, ESC credentials) instead, use `./install-pulumi.sh` / `./cleanup-pulumi.sh`; see [PULUMI.md](PULUMI.md).
+To deploy the same Terraform with Pulumi HCL (Pulumi state, optional ESC credentials) instead, use `./install-pulumi.sh` / `./cleanup-pulumi.sh`; see [PULUMI.md](PULUMI.md).
 
 The solution's `blueprint.tfvars` enables the `agent-sandbox` controller and `kro` as ArgoCD-managed addons via the base module. After `install.sh` completes, the cluster is up with:
 

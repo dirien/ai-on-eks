@@ -3,14 +3,17 @@
 This branch deploys the agent-sandbox blueprint (`infra/base/terraform` plus
 `terraform/blueprint.tfvars`) with [Pulumi HCL](https://github.com/pulumi/pulumi-hcl):
 Pulumi runs the Terraform HCL directly (`runtime: hcl` in `Pulumi.yaml`). Nothing
-is converted. Pulumi Cloud holds the state, and AWS credentials come from a Pulumi
-ESC environment. The Terraform path (`install.sh` / `cleanup.sh`) still works; the
+is converted. Pulumi Cloud holds the state. AWS credentials are your ambient ones
+(`AWS_PROFILE`, environment, SSO), or optionally come from a Pulumi ESC environment
+(`ESC_ENV`). The Terraform path (`install.sh` / `cleanup.sh`) still works; the
 base-module changes below are valid Terraform too.
 
 ## Quick start
 
 Prerequisites: `pulumi` (v3.268+, logged in to Pulumi Cloud), AWS CLI v2, `kubectl`
-(1.33-1.35), and read access to the ESC environment.
+(1.33-1.35), and AWS credentials for the target account. Optionally set `ESC_ENV` to a
+Pulumi ESC environment that exports AWS credentials; both scripts then run their AWS calls
+under `pulumi env run "$ESC_ENV"`.
 
 ```bash
 cd infra/agent-sandbox
@@ -20,10 +23,13 @@ PREVIEW_ONLY=1 ./install-pulumi.sh
 
 # Deploy (20-30 min)
 ./install-pulumi.sh
+# ... or with an explicit stack and AWS credentials from ESC
+PULUMI_STACK=<org>/agent-sandbox-eks/dev ESC_ENV=<org>/<project>/<env> ./install-pulumi.sh
 
-# kubectl access (the kubeconfig calls `aws eks get-token`, so kubectl also needs ESC credentials)
-pulumi env run ediri/pulumi-idp/auth -- aws eks update-kubeconfig --name agent-sandbox --region us-east-1
-pulumi env run ediri/pulumi-idp/auth -- kubectl get pods -n agent-sandbox-system
+# kubectl access (the kubeconfig calls `aws eks get-token`, so kubectl needs AWS
+# credentials too; with ESC, prefix both with `pulumi env run <org>/<project>/<env> --`)
+aws eks update-kubeconfig --name agent-sandbox --region us-east-1
+kubectl get pods -n agent-sandbox-system
 
 # Tear down
 ./cleanup-pulumi.sh
@@ -33,8 +39,8 @@ Demo on top of this deployment: [`blueprints/agent-sandbox/openhands/`](../../bl
 
 | Variable | Default | Used by |
 |---|---|---|
-| `PULUMI_STACK` | `ediri/agent-sandbox-eks/dev` | both scripts |
-| `ESC_ENV` | `ediri/pulumi-idp/auth` | both scripts |
+| `PULUMI_STACK` | the stack selected in `terraform/_LOCAL`. On a first run with none selected, install creates and selects `dev` in your default Pulumi organization; cleanup exits with an error | both scripts |
+| `ESC_ENV` | unset: the ambient AWS credentials are used. Set it to a Pulumi ESC environment that exports AWS credentials to run under `pulumi env run` | both scripts |
 | `PREVIEW_ONLY` | `0` (`1` runs `pulumi preview` only) | install |
 | `MAX_ATTEMPTS` | `3` | install (`pulumi up`), cleanup (`pulumi destroy`) |
 | `RETRY_DELAY` | `60` seconds | install |
@@ -53,8 +59,10 @@ It follows the same steps as `install.sh`:
 4. Runs `pulumi install`, then checks that `sdks/<provider>/hcl.sdk.json` exists. `pulumi install`
    exits 0 and installs nothing when the HCL fails to parse
    ([pulumi-hcl#688](https://github.com/pulumi/pulumi-hcl/issues/688)).
-5. Runs `pulumi stack select --create $PULUMI_STACK`.
-6. Runs `pulumi preview` or `pulumi up --yes`, wrapped in `pulumi env run $ESC_ENV --`.
+5. Selects the stack: `pulumi stack select --create $PULUMI_STACK` if `PULUMI_STACK` is set,
+   else the stack already selected in `_LOCAL`, else `pulumi stack select --create dev`.
+6. Runs `pulumi preview` or `pulumi up --yes`, wrapped in `pulumi env run $ESC_ENV --` if
+   `ESC_ENV` is set.
 
 There is no staged `-target` apply. Terraform needs one because it cannot plan
 providers or `for_each` whose inputs stay unknown until the cluster exists.
@@ -85,9 +93,11 @@ Run `rm -rf terraform/_LOCAL/sdks` to re-resolve them.
 
 ### What `cleanup-pulumi.sh` does
 
-This is `cleanup.sh` with the Terraform destroy phase replaced. The script re-runs itself
-under `pulumi env run $ESC_ENV`, so `aws`, `kubectl` and `pulumi` all get credentials. It
-writes its own temporary kubeconfig and leaves your current context alone.
+This is `cleanup.sh` with the Terraform destroy phase replaced. With `ESC_ENV` set, the
+script re-runs itself under `pulumi env run $ESC_ENV`, so `aws`, `kubectl` and `pulumi` all
+get credentials; otherwise it uses the ambient ones. It resolves the stack before phase 0
+and stops if there is none. It writes its own temporary kubeconfig and leaves your current
+context alone.
 
 0. Uninstalls the egress example: CNPs/ANPs and the `<cluster>-bedrock-irsa` role. If the
    cluster is already gone, it deletes only the IAM role.
@@ -114,14 +124,14 @@ The stack itself is kept, empty, so it can be reused.
 
 | Terraform (README) | Pulumi |
 |---|---|
-| `terraform -chdir=../terraform/_LOCAL output -raw deployment_name` | `pulumi -C ../terraform/_LOCAL stack output deployment_name --stack ediri/agent-sandbox-eks/dev` |
+| `terraform -chdir=../terraform/_LOCAL output -raw deployment_name` | `pulumi -C ../terraform/_LOCAL stack output deployment_name` (add `--stack <org>/agent-sandbox-eks/dev` for a stack other than the selected one) |
 | `terraform output -raw configure_kubectl` | `pulumi -C terraform/_LOCAL stack output configure_kubectl` |
 | `kubectl get ec2nodeclass m6i-cpu -o jsonpath='{.spec.role}'` (the README's Karpenter role lookup) | `pulumi -C ../terraform/_LOCAL stack output karpenter_node_iam_role` (the base creates the `general-purpose`, `gpu` and `neuron` EC2NodeClasses; there is no `m6i-cpu`) |
 | `terraform state list` | `pulumi stack --show-urns` / `pulumi stack export` |
 
 The blueprint scripts (`conformance.sh`, `basic/install.sh`, the egress example) read only
-`terraform/blueprint.tfvars` and the kubectl context, so they work unchanged. Run them
-under `pulumi env run ediri/pulumi-idp/auth --`.
+`terraform/blueprint.tfvars` and the kubectl context, so they work unchanged. With ESC, run
+them under `pulumi env run <org>/<project>/<env> --`.
 
 ## Base-module changes for Pulumi HCL
 

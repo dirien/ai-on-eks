@@ -17,7 +17,7 @@
 #
 # Pulumi stack (for the deployment_name and karpenter_node_iam_role outputs):
 # PULUMI_STACK if set, else the stack selected in infra/agent-sandbox/terraform/_LOCAL
-# (install-pulumi.sh runs `pulumi stack select --create` there).
+# (the one install-pulumi.sh selected there).
 #
 # AWS credentials: the ambient ones (AWS_PROFILE, env, SSO, ...), or, with
 # ESC_ENV set, re-runs itself under `pulumi env run "$ESC_ENV"`: aws, kubectl
@@ -45,7 +45,7 @@ if [ -n "${PULUMI_STACK:-}" ]; then
   STACK_ARGS=(--stack "$PULUMI_STACK")
 else
   STACK_ARGS=()
-  PULUMI_STACK="$(pulumi -C "$LOCAL_DIR" stack --show-name 2>/dev/null)" \
+  PULUMI_STACK="$(pulumi -C "$LOCAL_DIR" stack --show-name -Q 2>/dev/null)" \
     || die "no Pulumi stack selected in $LOCAL_DIR; set PULUMI_STACK (org/project/stack)"
 fi
 

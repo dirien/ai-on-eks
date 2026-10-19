@@ -11,10 +11,13 @@
 #      Pulumi HCL has no -var-file flag; it loads terraform.tfvars and
 #      *.auto.tfvars from the project root.
 #   4. `pulumi install` (resolves providers/modules, writes _LOCAL/sdks/).
-#   5. Select (or create) the stack.
-#   6. `pulumi preview` (PREVIEW_ONLY=1) or `pulumi up`, wrapped in
-#      `pulumi env run <ESC env> --` so AWS credentials come from
-#      Pulumi ESC.
+#   5. Select the stack: PULUMI_STACK (created if missing), else the
+#      stack already selected in _LOCAL, else create and select `dev`
+#      in your default Pulumi organization (first run).
+#   6. `pulumi preview` (PREVIEW_ONLY=1) or `pulumi up`. With ESC_ENV
+#      set, wrapped in `pulumi env run <ESC env> --` so AWS credentials
+#      come from Pulumi ESC; otherwise the ambient AWS credentials
+#      (AWS_PROFILE, env, SSO, ...) are used.
 #
 # Unlike install.sh there is no staged `-target` apply. Terraform needs
 # it because it cannot plan providers/for_each whose inputs are unknown
@@ -31,8 +34,11 @@
 # API throttling).
 #
 # Environment:
-#   PULUMI_STACK   stack to deploy        (default ediri/agent-sandbox-eks/dev)
-#   ESC_ENV        Pulumi ESC environment  (default ediri/pulumi-idp/auth)
+#   PULUMI_STACK   stack to deploy, e.g. <org>/agent-sandbox-eks/dev
+#                  (default: the stack selected in terraform/_LOCAL, or a
+#                  new `dev` stack on the first run)
+#   ESC_ENV        Pulumi ESC environment that exports AWS credentials
+#                  (default: unset, use the ambient AWS credentials)
 #   PREVIEW_ONLY   1 = run `pulumi preview` only, no changes
 #   MAX_ATTEMPTS   `pulumi up` attempts    (default 3)
 #   RETRY_DELAY    seconds between attempts (default 60)
@@ -48,8 +54,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOCAL_DIR="$SCRIPT_DIR/terraform/_LOCAL"
 
-PULUMI_STACK="${PULUMI_STACK:-ediri/agent-sandbox-eks/dev}"
-ESC_ENV="${ESC_ENV:-ediri/pulumi-idp/auth}"
+PULUMI_STACK="${PULUMI_STACK:-}"
+ESC_ENV="${ESC_ENV:-}"
 PREVIEW_ONLY="${PREVIEW_ONLY:-0}"
 MAX_ATTEMPTS="${MAX_ATTEMPTS:-3}"
 RETRY_DELAY="${RETRY_DELAY:-60}"
@@ -57,8 +63,11 @@ read -r -a EXTRA_ARGS <<< "${PULUMI_ARGS:-}"
 
 log() { echo "[$(date +%H:%M:%S)] $*"; }
 
-# Run a command with AWS credentials from Pulumi ESC.
-esc() { pulumi env run "$ESC_ENV" -- "$@"; }
+# Run a command with AWS credentials from Pulumi ESC if ESC_ENV is set,
+# otherwise with the ambient AWS credentials.
+esc() { if [ -n "$ESC_ENV" ]; then pulumi env run "$ESC_ENV" -- "$@"; else "$@"; fi; }
+# Same prefix for the commands this script prints.
+RUN_PREFIX="${ESC_ENV:+pulumi env run $ESC_ENV -- }"
 
 for bin in pulumi aws; do
     if ! command -v "$bin" >/dev/null 2>&1; then
@@ -98,11 +107,21 @@ for sdk in aws helm kubernetes kubectl random; do
     fi
 done
 
-log "Selecting stack $PULUMI_STACK"
-pulumi stack select --create "$PULUMI_STACK" --non-interactive
+if [ -n "$PULUMI_STACK" ]; then
+    log "Selecting stack $PULUMI_STACK"
+    pulumi stack select --create "$PULUMI_STACK" --non-interactive
+elif PULUMI_STACK="$(pulumi stack --show-name -Q 2>/dev/null)" && [ -n "$PULUMI_STACK" ]; then
+    log "Using the stack selected in $LOCAL_DIR: $PULUMI_STACK"
+else
+    log "No stack selected in $LOCAL_DIR; creating stack 'dev' in your default Pulumi organization"
+    log "(set PULUMI_STACK=<org>/agent-sandbox-eks/<stack> to pick another)"
+    pulumi stack select --create dev --non-interactive
+    PULUMI_STACK="$(pulumi stack --show-name -Q)"
+    log "Selected stack $PULUMI_STACK"
+fi
 
 if [ "$PREVIEW_ONLY" = "1" ]; then
-    log "pulumi preview (ESC env: $ESC_ENV)"
+    log "pulumi preview${ESC_ENV:+ (ESC env: $ESC_ENV)}"
     esc pulumi preview --stack "$PULUMI_STACK" --non-interactive "${EXTRA_ARGS[@]}"
     exit 0
 fi
@@ -114,7 +133,7 @@ until esc pulumi up --stack "$PULUMI_STACK" --yes --non-interactive "${EXTRA_ARG
         log "Re-run ./install-pulumi.sh to continue; Pulumi resumes from the recorded state."
         log "If the update was interrupted (not just failed), first run:"
         log "  cd $LOCAL_DIR && pulumi cancel --stack $PULUMI_STACK --yes   # only if an update is still locked"
-        log "  pulumi env run $ESC_ENV -- pulumi refresh --stack $PULUMI_STACK --yes --clear-pending-creates"
+        log "  ${RUN_PREFIX}pulumi refresh --stack $PULUMI_STACK --yes --clear-pending-creates"
         exit 1
     fi
     attempt=$((attempt + 1))
@@ -126,6 +145,6 @@ log "SUCCESS: pulumi up completed (attempt $attempt)."
 echo ""
 pulumi stack output --stack "$PULUMI_STACK" || true
 echo ""
-echo "Next steps (AWS credentials via ESC):"
-echo "  pulumi env run $ESC_ENV -- $(pulumi stack output configure_kubectl --stack "$PULUMI_STACK" 2>/dev/null || echo 'aws eks update-kubeconfig --name <name> --region <region>')"
-echo "  pulumi env run $ESC_ENV -- kubectl get pods -n agent-sandbox-system"
+echo "Next steps${ESC_ENV:+ (AWS credentials via ESC $ESC_ENV)}:"
+echo "  ${RUN_PREFIX}$(pulumi stack output configure_kubectl --stack "$PULUMI_STACK" 2>/dev/null || echo 'aws eks update-kubeconfig --name <name> --region <region>')"
+echo "  ${RUN_PREFIX}kubectl get pods -n agent-sandbox-system"
